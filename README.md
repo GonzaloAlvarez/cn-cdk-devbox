@@ -79,3 +79,15 @@ with the staged key → pin `pki.lan → 10.0.0.192` in `/etc/hosts` → amun
 core (CA trust, ufw deny-in/allow-22, dotfiles, sshd hardening) → extra
 amun plugins → `/var/lib/clouddevbox/bootstrap-complete`. Full log at
 `/var/log/devbox-bootstrap.log`.
+
+Two bootstrap facts worth knowing:
+
+- The amun script is downloaded to `/usr/local/lib/amun-bootstrap` and run
+  from there — the usual `bash <(curl …)` one-liner breaks under cloud-init
+  (the polyglot needs `$0` to be a regular file or a tty on stdin). Re-run
+  amun on a box with `bash /usr/local/lib/amun-bootstrap [plugin]`.
+- **step-ca trust is currently NOT installed** even though the role runs:
+  `10.0.0.192` is longest-prefix-shadowed by k8s-router's `10.0.0.192/27`
+  MetalLB advert for every pure-tailnet client, so the pki role probes,
+  times out, and skips (by design). See homelab architecture §4.15. Devboxes
+  only consume LE-certed `*.lab.gn.al`, so nothing breaks.

@@ -1,0 +1,119 @@
+# devbox bootstrap - rendered by cn-cdk-devbox for box: __BOX_NAME__
+# Runs as root at first boot. Full log: /var/log/devbox-bootstrap.log
+exec >>/var/log/devbox-bootstrap.log 2>&1
+set -x
+export DEBIAN_FRONTEND=noninteractive
+mkdir -p /var/lib/clouddevbox /etc/clouddevbox
+trap 'echo "FAILED: $BASH_COMMAND" > /var/lib/clouddevbox/bootstrap-failed' ERR
+set -e
+
+retry() {
+    local n=0
+    until "$@"; do
+        n=$((n+1))
+        [ "$n" -ge 24 ] && return 1
+        sleep 5
+    done
+}
+
+# DPkg lock timeout defuses the unattended-upgrades race on Debian cloud images
+APT="apt-get -o DPkg::Lock::Timeout=600"
+retry $APT update -y
+$APT upgrade -y
+$APT install -y ca-certificates curl gnupg git sudo unzip
+
+# SSM agent first: break-glass access exists even if a later step fails
+ARCH="$(dpkg --print-architecture)"
+retry curl -fsSL -o /tmp/ssm.deb "https://s3.us-east-2.amazonaws.com/amazon-ssm-us-east-2/latest/debian_${ARCH}/amazon-ssm-agent.deb"
+dpkg -i /tmp/ssm.deb
+systemctl enable --now amazon-ssm-agent
+
+useradd -m -s /bin/bash gonzalo
+echo "gonzalo ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/gonzalo
+chmod 440 /etc/sudoers.d/gonzalo
+usermod -aG sudo gonzalo
+mkdir -p /home/gonzalo/.ssh
+retry curl -fsSL -o /home/gonzalo/.ssh/authorized_keys https://raw.githubusercontent.com/GonzaloAlvarez/credentials/refs/heads/master/SSH/GonzaloAlvarez-MasterSSH-pubkey.pem
+chmod 700 /home/gonzalo/.ssh
+chmod 600 /home/gonzalo/.ssh/authorized_keys
+chown -R gonzalo:gonzalo /home/gonzalo/.ssh
+deluser --remove-home admin || true
+
+hostnamectl set-hostname devbox-__BOX_NAME__
+echo 'preserve_hostname: true' > /etc/cloud/cloud.cfg.d/99-hostname.cfg
+echo "127.0.1.1 devbox-__BOX_NAME__" >> /etc/hosts
+
+# autostop: self-STOP when uptime exceeds /etc/clouddevbox/autostop ('off' disables).
+# clouddevbox `autostop <name> <value>` rewrites the config via SSM send-command.
+echo "__AUTOSTOP__" > /etc/clouddevbox/autostop
+cat > /usr/local/bin/devbox-autostop-check <<'AUTOSTOP_EOF'
+#!/bin/bash
+set -eu
+conf="$(cat /etc/clouddevbox/autostop 2>/dev/null || echo off)"
+[ "$conf" = "off" ] && exit 0
+case "$conf" in
+    *h) limit=$(( ${conf%h} * 3600 )) ;;
+    *m) limit=$(( ${conf%m} * 60 )) ;;
+    *)  exit 0 ;;
+esac
+up="$(cut -d. -f1 /proc/uptime)"
+if [ "$up" -ge "$limit" ]; then
+    wall "devbox autostop: uptime ${up}s exceeded ${conf}; powering off" || true
+    systemctl poweroff
+fi
+AUTOSTOP_EOF
+chmod +x /usr/local/bin/devbox-autostop-check
+cat > /etc/systemd/system/devbox-autostop.service <<'AUTOSTOP_EOF'
+[Unit]
+Description=Stop the devbox when uptime exceeds /etc/clouddevbox/autostop
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/devbox-autostop-check
+AUTOSTOP_EOF
+cat > /etc/systemd/system/devbox-autostop.timer <<'AUTOSTOP_EOF'
+[Unit]
+Description=Periodic devbox autostop check
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+AUTOSTOP_EOF
+systemctl daemon-reload
+systemctl enable --now devbox-autostop.timer
+
+# aws cli only for the SSM parameter fetch below (Debian ships awscli v2)
+$APT install -y awscli || true
+if ! command -v aws >/dev/null 2>&1; then
+    retry curl -fsSL -o /tmp/awscliv2.zip "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip"
+    unzip -q /tmp/awscliv2.zip -d /tmp
+    /tmp/aws/install
+fi
+
+# tailscale: the amun plugin installs+enables tailscaled; `up` happens here
+# with the one-shot preauth key staged by clouddevbox in SSM Parameter Store.
+sudo -H -u gonzalo bash -c 'bash <(curl -fsSL https://go.gn.al/amun) tailscale'
+AUTHKEY="$(retry aws ssm get-parameter --region us-east-2 --name /devbox/__BOX_NAME__/ts-authkey --with-decryption --query Parameter.Value --output text)"
+tailscale up --login-server=https://hs.gn.al --authkey="${AUTHKEY}" --hostname="devbox-__BOX_NAME__" --accept-routes
+unset AUTHKEY
+retry tailscale ip -4
+
+# pki.lan is LAN-only DNS; pin it so the amun pki role can fetch the step-ca
+# root over infra-exit's 10.0.0.0/24 subnet route (ACL: tag:devbox -> 10.0.0.192:80,443)
+echo "10.0.0.192 pki.lan" >> /etc/hosts
+
+# amun core: permissions, utils (~/bin/amun CLI), pki (CA trust), dotfiles,
+# config, ufw (deny incoming + allow 22 - AFTER tailscale is up), remoteaccess
+# (sshd hardening). SSH is reachable over the tailnet only; the SG blocks
+# everything from outside.
+sudo -H -u gonzalo bash -c 'bash <(curl -fsSL https://go.gn.al/amun)'
+
+for p in __PLUGINS__; do
+    sudo -H -u gonzalo bash -c "bash <(curl -fsSL https://go.gn.al/amun) $p"
+done
+
+trap - ERR
+date -u > /var/lib/clouddevbox/bootstrap-complete

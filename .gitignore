@@ -1,0 +1,14 @@
+*.swp
+package-lock.json
+__pycache__
+.pytest_cache
+.venv
+.npm
+*.egg-info
+
+# CDK asset staging directory
+.cdk.staging
+cdk.out
+
+# Account-scoped lookup cache (AZs + pinned AMIs) - never commit in a public repo
+cdk.context.json

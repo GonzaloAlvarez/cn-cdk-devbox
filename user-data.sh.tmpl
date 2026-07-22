@@ -100,9 +100,24 @@ fi
 retry curl -fsSL -o /usr/local/lib/amun-bootstrap https://go.gn.al/amun
 chmod 755 /usr/local/lib/amun-bootstrap
 
+# amun plays pull from GitHub/PyPI/apt mid-run; one flaky download fails the
+# whole play (seen live: neovim tarball read-timeout). Runs are idempotent,
+# so retry the full invocation a few times before giving up.
+amun_run() {
+    local attempt
+    for attempt in 1 2 3; do
+        if sudo -H -u gonzalo bash /usr/local/lib/amun-bootstrap "$@"; then
+            return 0
+        fi
+        echo "amun run '$*' failed (attempt ${attempt}/3); retrying in 20s"
+        sleep 20
+    done
+    return 1
+}
+
 # tailscale: the amun plugin installs+enables tailscaled; `up` happens here
 # with the one-shot preauth key staged by clouddevbox in SSM Parameter Store.
-sudo -H -u gonzalo bash /usr/local/lib/amun-bootstrap tailscale
+amun_run tailscale
 AUTHKEY="$(retry aws ssm get-parameter --region us-east-2 --name /devbox/__BOX_NAME__/ts-authkey --with-decryption --query Parameter.Value --output text)"
 tailscale up --login-server=https://hs.gn.al --authkey="${AUTHKEY}" --hostname="devbox-__BOX_NAME__" --accept-routes
 unset AUTHKEY
@@ -116,10 +131,10 @@ echo "10.0.0.192 pki.lan" >> /etc/hosts
 # config, ufw (deny incoming + allow 22 - AFTER tailscale is up), remoteaccess
 # (sshd hardening). SSH is reachable over the tailnet only; the SG blocks
 # everything from outside.
-sudo -H -u gonzalo bash /usr/local/lib/amun-bootstrap
+amun_run
 
 for p in __PLUGINS__; do
-    sudo -H -u gonzalo bash /usr/local/lib/amun-bootstrap "$p"
+    amun_run "$p"
 done
 
 trap - ERR

@@ -117,6 +117,8 @@ def test_user_data_rendering(templates):
     assert "/devbox/tst1/ts-authkey" in blob
     assert "go.gn.al/amun" in blob
     assert "--login-server=https://hs.gn.al" in blob
+    assert "/etc/clouddevbox/plugins" in blob
+    assert "/var/lib/clouddevbox/provisioned" in blob
 
 
 def test_no_lambda_assets(templates):

@@ -46,6 +46,10 @@ echo "127.0.1.1 devbox-__BOX_NAME__" >> /etc/hosts
 # autostop: self-STOP when uptime exceeds /etc/clouddevbox/autostop ('off' disables).
 # clouddevbox `autostop <name> <value>` rewrites the config via SSM send-command.
 echo "__AUTOSTOP__" > /etc/clouddevbox/autostop
+
+# provisioning ledger for `clouddevbox status`: the requested amun stage list,
+# and (below, as each finishes) the completed ones.
+echo core __PLUGINS__ | tr -s ' ' > /etc/clouddevbox/plugins
 cat > /usr/local/bin/devbox-autostop-check <<'AUTOSTOP_EOF'
 #!/bin/bash
 set -eu
@@ -132,9 +136,11 @@ echo "10.0.0.192 pki.lan" >> /etc/hosts
 # (sshd hardening). SSH is reachable over the tailnet only; the SG blocks
 # everything from outside.
 amun_run
+echo core >> /var/lib/clouddevbox/provisioned
 
 for p in __PLUGINS__; do
     amun_run "$p"
+    echo "$p" >> /var/lib/clouddevbox/provisioned
 done
 
 trap - ERR

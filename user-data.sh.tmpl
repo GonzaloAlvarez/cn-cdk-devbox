@@ -93,9 +93,16 @@ if ! command -v aws >/dev/null 2>&1; then
     /tmp/aws/install
 fi
 
+# amun bootstrap script: download to a real file instead of the usual
+# `bash <(curl ...)` one-liner - the polyglot script needs $0 to be a regular
+# file (or a tty on stdin, which cloud-init doesn't have) to find its own
+# python body.
+retry curl -fsSL -o /usr/local/lib/amun-bootstrap https://go.gn.al/amun
+chmod 755 /usr/local/lib/amun-bootstrap
+
 # tailscale: the amun plugin installs+enables tailscaled; `up` happens here
 # with the one-shot preauth key staged by clouddevbox in SSM Parameter Store.
-sudo -H -u gonzalo bash -c 'bash <(curl -fsSL https://go.gn.al/amun) tailscale'
+sudo -H -u gonzalo bash /usr/local/lib/amun-bootstrap tailscale
 AUTHKEY="$(retry aws ssm get-parameter --region us-east-2 --name /devbox/__BOX_NAME__/ts-authkey --with-decryption --query Parameter.Value --output text)"
 tailscale up --login-server=https://hs.gn.al --authkey="${AUTHKEY}" --hostname="devbox-__BOX_NAME__" --accept-routes
 unset AUTHKEY
@@ -109,10 +116,10 @@ echo "10.0.0.192 pki.lan" >> /etc/hosts
 # config, ufw (deny incoming + allow 22 - AFTER tailscale is up), remoteaccess
 # (sshd hardening). SSH is reachable over the tailnet only; the SG blocks
 # everything from outside.
-sudo -H -u gonzalo bash -c 'bash <(curl -fsSL https://go.gn.al/amun)'
+sudo -H -u gonzalo bash /usr/local/lib/amun-bootstrap
 
 for p in __PLUGINS__; do
-    sudo -H -u gonzalo bash -c "bash <(curl -fsSL https://go.gn.al/amun) $p"
+    sudo -H -u gonzalo bash /usr/local/lib/amun-bootstrap "$p"
 done
 
 trap - ERR

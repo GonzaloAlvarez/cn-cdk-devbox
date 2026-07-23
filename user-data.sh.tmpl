@@ -127,9 +127,11 @@ tailscale up --login-server=https://hs.gn.al --authkey="${AUTHKEY}" --hostname="
 unset AUTHKEY
 retry tailscale ip -4
 
-# pki.lan is LAN-only DNS; pin it so the amun pki role can fetch the step-ca
-# root over infra-exit's 10.0.0.0/24 subnet route (ACL: tag:devbox -> 10.0.0.192:80,443)
+# .lan names have no tailnet DNS zone; pin the two LAN hosts devboxes may
+# reach (ACL: tag:devbox -> 10.0.0.192:80,443 for the step-ca root fetch,
+# and -> 10.1.1.92:22 for the neptune SSH next-hop into the LAN).
 echo "10.0.0.192 pki.lan" >> /etc/hosts
+echo "10.1.1.92 neptune.lan" >> /etc/hosts
 
 # amun core: permissions, utils (~/bin/amun CLI), pki (CA trust), dotfiles,
 # config, ufw (deny incoming + allow 22 - AFTER tailscale is up), remoteaccess
